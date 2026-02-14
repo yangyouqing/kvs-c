@@ -20,6 +20,7 @@ UINT32 setLogLevel()
         logLevel < LOG_LEVEL_VERBOSE || logLevel > LOG_LEVEL_SILENT) {
         logLevel = LOG_LEVEL_WARN;
     }
+    logLevel = LOG_LEVEL_VERBOSE; //TODO add by yyq by test
     SET_LOGGER_LOG_LEVEL(logLevel);
     return logLevel;
 }
@@ -74,6 +75,13 @@ VOID onConnectionStateChange(UINT64 customData, RTC_PEER_CONNECTION_STATE newSta
 CleanUp:
 
     CHK_LOG_ERR(retStatus);
+}
+
+void sampleRelayMediaReceived(UINT64 customData, BOOL isVideo, PBYTE pData, UINT32 dataLen)
+{
+    UNUSED_PARAM(customData);
+    UNUSED_PARAM(pData);
+    DLOGV("Relay media received: %s %u bytes", isVideo ? "video" : "audio", dataLen);
 }
 
 STATUS signalingClientStateChanged(UINT64 customData, SIGNALING_CLIENT_STATE state)
@@ -781,6 +789,7 @@ STATUS lookForSslCert(PSampleConfiguration* ppSampleConfiguration)
 
     MEMSET(certName, 0x0, ARRAY_SIZE(certName));
     pSampleConfiguration->pCaCertPath = GETENV(CACERT_PATH_ENV_VAR);
+    pSampleConfiguration->pCaCertPath = "/home/yq/kvs-c/certs/server.pem";
 
     // if ca cert path is not set from the environment, try to use the one that cmake detected
     if (pSampleConfiguration->pCaCertPath == NULL) {
@@ -831,15 +840,16 @@ STATUS createSampleConfiguration(PCHAR channelName, SIGNALING_CHANNEL_ROLE_TYPE 
     CHK_ERR((pIotCoreRoleAlias = GETENV(IOT_CORE_ROLE_ALIAS)) != NULL, STATUS_INVALID_OPERATION, "AWS_IOT_CORE_ROLE_ALIAS must be set");
     CHK_ERR((pIotCoreThingName = GETENV(IOT_CORE_THING_NAME)) != NULL, STATUS_INVALID_OPERATION, "AWS_IOT_CORE_THING_NAME must be set");
 #else
-    CHK_ERR((pAccessKey = GETENV(ACCESS_KEY_ENV_VAR)) != NULL, STATUS_INVALID_OPERATION, "AWS_ACCESS_KEY_ID must be set");
-    CHK_ERR((pSecretKey = GETENV(SECRET_KEY_ENV_VAR)) != NULL, STATUS_INVALID_OPERATION, "AWS_SECRET_ACCESS_KEY must be set");
+    //CHK_ERR((pAccessKey = GETENV(ACCESS_KEY_ENV_VAR)) != NULL, STATUS_INVALID_OPERATION, "AWS_ACCESS_KEY_ID must be set");
+    //CHK_ERR((pSecretKey = GETENV(SECRET_KEY_ENV_VAR)) != NULL, STATUS_INVALID_OPERATION, "AWS_SECRET_ACCESS_KEY must be set");
+    ;
 #endif
 
-    pSessionToken = GETENV(SESSION_TOKEN_ENV_VAR);
-    if (pSessionToken != NULL && IS_EMPTY_STRING(pSessionToken)) {
-        DLOGW("Session token is set but its value is empty. Ignoring.");
-        pSessionToken = NULL;
-    }
+    // pSessionToken = GETENV(SESSION_TOKEN_ENV_VAR);
+    // if (pSessionToken != NULL && IS_EMPTY_STRING(pSessionToken)) {
+    //     DLOGW("Session token is set but its value is empty. Ignoring.");
+    //     pSessionToken = NULL;
+    // }
 
     // If the env is set, we generate normal log files apart from filtered profile log files
     // If not set, we generate only the filtered profile log files
@@ -873,8 +883,9 @@ STATUS createSampleConfiguration(PCHAR channelName, SIGNALING_CHANNEL_ROLE_TYPE 
     CHK_STATUS(createLwsIotCredentialProvider(pIotCoreCredentialEndPoint, pIotCoreCert, pIotCorePrivateKey, pSampleConfiguration->pCaCertPath,
                                               pIotCoreRoleAlias, pIotCoreThingName, &pSampleConfiguration->pCredentialProvider));
 #else
-    CHK_STATUS(
-        createStaticCredentialProvider(pAccessKey, 0, pSecretKey, 0, pSessionToken, 0, MAX_UINT64, &pSampleConfiguration->pCredentialProvider));
+    //CHK_STATUS(
+    //    createStaticCredentialProvider(pAccessKey, 0, pSecretKey, 0, pSessionToken, 0, MAX_UINT64, &pSampleConfiguration->pCredentialProvider));
+    ;
 #endif
 
     pSampleConfiguration->mediaSenderTid = INVALID_TID_VALUE;
@@ -912,10 +923,14 @@ STATUS createSampleConfiguration(PCHAR channelName, SIGNALING_CHANNEL_ROLE_TYPE 
     pSampleConfiguration->channelInfo.pCertPath = pSampleConfiguration->pCaCertPath;
     pSampleConfiguration->channelInfo.messageTtl = 0; // Default is 60 seconds
 
+    pSampleConfiguration->clientInfo.pRelayUrl = GETENV("KVS_RELAY_URL"); // When set, use kvs-ngtcp2 relay (e.g. "host:port")
+
     pSampleConfiguration->signalingClientCallbacks.version = SIGNALING_CLIENT_CALLBACKS_CURRENT_VERSION;
     pSampleConfiguration->signalingClientCallbacks.errorReportFn = signalingClientError;
     pSampleConfiguration->signalingClientCallbacks.stateChangeFn = signalingClientStateChanged;
     pSampleConfiguration->signalingClientCallbacks.customData = (UINT64) pSampleConfiguration;
+    pSampleConfiguration->signalingClientCallbacks.relayMediaReceivedFn =
+        (pSampleConfiguration->clientInfo.pRelayUrl != NULL) ? sampleRelayMediaReceived : NULL;
 
     pSampleConfiguration->clientInfo.version = SIGNALING_CLIENT_INFO_CURRENT_VERSION;
     pSampleConfiguration->clientInfo.loggingLevel = logLevel;
@@ -938,7 +953,7 @@ STATUS createSampleConfiguration(PCHAR channelName, SIGNALING_CHANNEL_ROLE_TYPE 
 
     CHK_STATUS(stackQueueCreate(&pSampleConfiguration->pregeneratedCertificates));
 
-    // Start the cert pre-gen timer callback
+    //Start the cert pre-gen timer callback
     if (SAMPLE_PRE_GENERATE_CERT) {
         CHK_LOG_ERR(retStatus =
                         timerQueueAddTimer(pSampleConfiguration->timerQueueHandle, 0, SAMPLE_PRE_GENERATE_CERT_PERIOD, pregenerateCertTimerCallback,
@@ -1279,7 +1294,8 @@ STATUS freeSampleConfiguration(PSampleConfiguration* ppSampleConfiguration)
 #ifdef IOT_CORE_ENABLE_CREDENTIALS
     freeIotCredentialProvider(&pSampleConfiguration->pCredentialProvider);
 #else
-    freeStaticCredentialProvider(&pSampleConfiguration->pCredentialProvider);
+    //freeStaticCredentialProvider(&pSampleConfiguration->pCredentialProvider);
+    ;
 #endif
 
     if (pSampleConfiguration->pregeneratedCertificates != NULL) {

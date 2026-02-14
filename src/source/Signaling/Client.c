@@ -161,6 +161,22 @@ CleanUp:
     return retStatus;
 }
 
+STATUS signalingClientSendRelayMedia(SIGNALING_CLIENT_HANDLE signalingClientHandle, BOOL isVideo, PBYTE pData, UINT32 dataLen)
+{
+    ENTERS();
+    STATUS retStatus = STATUS_SUCCESS;
+    PSignalingClient pSignalingClient = FROM_SIGNALING_CLIENT_HANDLE(signalingClientHandle);
+
+    CHK(pSignalingClient != NULL, STATUS_NULL_ARG);
+    CHK_STATUS(signalingSendRelayMediaSync(pSignalingClient, isVideo, pData, dataLen));
+
+CleanUp:
+
+    SIGNALING_UPDATE_ERROR_COUNT(pSignalingClient, retStatus);
+    LEAVES();
+    return retStatus;
+}
+
 STATUS signalingClientConnectSync(SIGNALING_CLIENT_HANDLE signalingClientHandle)
 {
     ENTERS();

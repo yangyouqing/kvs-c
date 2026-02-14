@@ -1,0 +1,37 @@
+# kvs-ngtcp2 relay + coturn for local testing.
+# Relay: TCP+TLS on 4433. Coturn: STUN/TURN on 3478 (UDP/TCP).
+# Clients use KVS_RELAY_URL=localhost:4433 and get ICE config (STUN/TURN) from JoinChannel response.
+
+services:
+  coturn:
+    image: coturn/coturn:latest
+    network_mode: host
+    # Use host network so clients on host can use localhost:3478. Alternatives: expose 3478:3478/udp and set KVS_STUN_URI to host IP.
+    command:
+      - --listening-port=3478
+      - --relay-ip=127.0.0.1
+      - --external-ip=127.0.0.1
+      - --realm=local
+      - --user=user:pass
+      - --no-cli
+      - --no-tlsv1
+      - --no-tlsv1_1
+    restart: unless-stopped
+
+  relay:
+    build:
+      context: ./kvs-ngtcp2-server
+      dockerfile: Dockerfile
+    ports:
+      - "4433:4433"
+    environment:
+      KVS_STUN_URI: "stun:localhost:3478"
+      KVS_TURN_URI: "turn:localhost:3478?transport=udp"
+      KVS_TURN_USER: "user"
+      KVS_TURN_PASS: "pass"
+    volumes:
+      # Mount certs (use server.pem/server.key or generate cert.pem/key.pem)
+      - ./certs:/certs:ro
+    command: ["--bind", "0.0.0.0", "--port", "4433", "--cert", "/certs/server.pem", "--key", "/certs/server.key"]
+    depends_on: []
+    restart: unless-stopped

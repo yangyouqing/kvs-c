@@ -1,0 +1,1 @@
+/usr/bin/cc  -fPIC -O3 -DNDEBUG CMakeFiles/discoverNatBehavior.dir/discoverNatBehavior.c.o -o discoverNatBehavior   -L/home/yq/kvs-c/open-source/lib  -Wl,-rpath,/home/yq/kvs-c/open-source/lib:/home/yq/kvs-c/build-relay: ../libkvsWebrtcClient.so 

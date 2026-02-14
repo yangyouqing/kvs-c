@@ -1,0 +1,17 @@
+/home/yq/kvs-c/build-relay/CMakeFiles/kvsWebrtcClient.dir
+/home/yq/kvs-c/build-relay/CMakeFiles/kvsWebrtcSignalingClient.dir
+/home/yq/kvs-c/build-relay/CMakeFiles/edit_cache.dir
+/home/yq/kvs-c/build-relay/CMakeFiles/rebuild_cache.dir
+/home/yq/kvs-c/build-relay/CMakeFiles/list_install_components.dir
+/home/yq/kvs-c/build-relay/CMakeFiles/install.dir
+/home/yq/kvs-c/build-relay/CMakeFiles/install/local.dir
+/home/yq/kvs-c/build-relay/CMakeFiles/install/strip.dir
+/home/yq/kvs-c/build-relay/samples/CMakeFiles/kvsWebrtcClientMaster.dir
+/home/yq/kvs-c/build-relay/samples/CMakeFiles/kvsWebrtcClientViewer.dir
+/home/yq/kvs-c/build-relay/samples/CMakeFiles/discoverNatBehavior.dir
+/home/yq/kvs-c/build-relay/samples/CMakeFiles/edit_cache.dir
+/home/yq/kvs-c/build-relay/samples/CMakeFiles/rebuild_cache.dir
+/home/yq/kvs-c/build-relay/samples/CMakeFiles/list_install_components.dir
+/home/yq/kvs-c/build-relay/samples/CMakeFiles/install.dir
+/home/yq/kvs-c/build-relay/samples/CMakeFiles/install/local.dir
+/home/yq/kvs-c/build-relay/samples/CMakeFiles/install/strip.dir

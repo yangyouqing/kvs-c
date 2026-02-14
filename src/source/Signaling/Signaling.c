@@ -2,6 +2,9 @@
 #include "../Include_i.h"
 #include <libwebsockets.h>
 #include "LwsApiCalls.h"
+#ifdef KVS_USE_OPENSSL
+#include "KvsNgtcp2Transport.h"
+#endif
 
 extern StateMachineState SIGNALING_STATE_MACHINE_STATES[];
 extern UINT32 SIGNALING_STATE_MACHINE_STATE_COUNT;
@@ -58,7 +61,7 @@ STATUS createSignalingSync(PSignalingClientInfoInternal pClientInfo, PChannelInf
 
     struct lws_protocols* pProtocols = NULL;
 
-    CHK(pClientInfo != NULL && pChannelInfo != NULL && pCallbacks != NULL && pCredentialProvider != NULL && ppSignalingClient != NULL,
+    CHK(pClientInfo != NULL && pChannelInfo != NULL && pCallbacks != NULL /*&& pCredentialProvider != NULL*/ && ppSignalingClient != NULL,
         STATUS_NULL_ARG);
     CHK(pChannelInfo->version <= CHANNEL_INFO_CURRENT_VERSION, STATUS_SIGNALING_INVALID_CHANNEL_INFO_VERSION);
     CHK(NULL != (pFileCacheEntry = (PSignalingFileCacheEntry) MEMCALLOC(1, SIZEOF(SignalingFileCacheEntry))), STATUS_NOT_ENOUGH_MEMORY);
@@ -224,6 +227,15 @@ STATUS createSignalingSync(PSignalingClientInfoInternal pClientInfo, PChannelInf
     // At this point we have constructed the main object and we can assign to the returned pointer
     *ppSignalingClient = pSignalingClient;
 
+#ifdef KVS_USE_OPENSSL
+    // When using kvs-ngtcp2 relay, create the transport so Connect will use it instead of LWS
+    if (!IS_NULL_OR_EMPTY_STRING(pSignalingClient->clientInfo.signalingClientInfo.pRelayUrl)) {
+        PKvsNgtcp2Transport pTransport = NULL;
+        CHK_STATUS(kvsNgtcp2TransportCreate(pSignalingClient, &pTransport));
+        pSignalingClient->pKvsNgtcp2Transport = pTransport;
+    }
+#endif
+
     // Notify of the state change initially as the state machinery is already in the NEW state
     if (pSignalingClient->signalingClientCallbacks.stateChangeFn != NULL) {
         CHK_STATUS(getStateMachineCurrentState(pSignalingClient->pStateMachine, &pStateMachineState));
@@ -271,6 +283,14 @@ STATUS freeSignaling(PSignalingClient* ppSignalingClient)
     ATOMIC_STORE_BOOL(&pSignalingClient->shutdown, TRUE);
 
     terminateOngoingOperations(pSignalingClient);
+
+#ifdef KVS_USE_OPENSSL
+    if (pSignalingClient->pKvsNgtcp2Transport != NULL) {
+        kvsNgtcp2TransportDisconnect((PKvsNgtcp2Transport) pSignalingClient->pKvsNgtcp2Transport);
+        kvsNgtcp2TransportDestroy((PKvsNgtcp2Transport*) &pSignalingClient->pKvsNgtcp2Transport);
+        pSignalingClient->pKvsNgtcp2Transport = NULL;
+    }
+#endif
 
     if (pSignalingClient->pWebsocketContext != NULL) {
         MUTEX_LOCK(pSignalingClient->lwsServiceLock);
@@ -431,6 +451,12 @@ STATUS terminateOngoingOperations(PSignalingClient pSignalingClient)
 
     CHK(pSignalingClient != NULL, STATUS_NULL_ARG);
 
+#ifdef KVS_USE_OPENSSL
+    if (pSignalingClient->pKvsNgtcp2Transport != NULL) {
+        kvsNgtcp2TransportDisconnect((PKvsNgtcp2Transport) pSignalingClient->pKvsNgtcp2Transport);
+    }
+#endif
+
     // Terminate the listener thread if alive
     terminateLwsListenerLoop(pSignalingClient);
 
@@ -460,8 +486,18 @@ STATUS signalingSendMessageSync(PSignalingClient pSignalingClient, PSignalingMes
     removeFromList = TRUE;
 
     // Perform the call
-    CHK_STATUS(sendLwsMessage(pSignalingClient, pSignalingMessage->messageType, pSignalingMessage->peerClientId, pSignalingMessage->payload,
-                              pSignalingMessage->payloadLen, pSignalingMessage->correlationId, 0));
+#ifdef KVS_USE_OPENSSL
+    if (pSignalingClient->pKvsNgtcp2Transport != NULL) {
+        CHK_STATUS(kvsNgtcp2TransportSendMessage((PKvsNgtcp2Transport) pSignalingClient->pKvsNgtcp2Transport,
+                                                 pSignalingMessage->messageType, pSignalingMessage->peerClientId, pSignalingMessage->payload,
+                                                 pSignalingMessage->payloadLen, pSignalingMessage->correlationId,
+                                                 pSignalingMessage->correlationId != NULL ? (UINT32) STRNLEN(pSignalingMessage->correlationId, 256) : 0));
+    } else
+#endif
+    {
+        CHK_STATUS(sendLwsMessage(pSignalingClient, pSignalingMessage->messageType, pSignalingMessage->peerClientId, pSignalingMessage->payload,
+                                  pSignalingMessage->payloadLen, pSignalingMessage->correlationId, 0));
+    }
 
     MUTEX_LOCK(pSignalingClient->offerSendReceiveTimeLock);
     if (pSignalingMessage->messageType == SIGNALING_MESSAGE_TYPE_OFFER) {
@@ -483,6 +519,30 @@ CleanUp:
         signalingRemoveOngoingMessage(pSignalingClient, pSignalingMessage->correlationId);
     }
 
+    LEAVES();
+    return retStatus;
+}
+
+STATUS signalingSendRelayMediaSync(PSignalingClient pSignalingClient, BOOL isVideo, PBYTE pData, UINT32 dataLen)
+{
+    ENTERS();
+    STATUS retStatus = STATUS_SUCCESS;
+#ifdef KVS_USE_OPENSSL
+    CHK(pSignalingClient != NULL && pData != NULL, STATUS_NULL_ARG);
+    if (pSignalingClient->pKvsNgtcp2Transport != NULL) {
+        retStatus = kvsNgtcp2TransportSendMediaFrame((PKvsNgtcp2Transport) pSignalingClient->pKvsNgtcp2Transport, isVideo, pData, dataLen);
+    } else {
+        retStatus = STATUS_INVALID_OPERATION;
+    }
+#else
+    UNUSED_PARAM(pSignalingClient);
+    UNUSED_PARAM(isVideo);
+    UNUSED_PARAM(pData);
+    UNUSED_PARAM(dataLen);
+    retStatus = STATUS_INVALID_OPERATION;
+#endif
+CleanUp:
+    CHK_LOG_ERR(retStatus);
     LEAVES();
     return retStatus;
 }
@@ -1017,26 +1077,26 @@ STATUS describeChannel(PSignalingClient pSignalingClient, UINT64 time)
 
     CHK(pSignalingClient != NULL, STATUS_NULL_ARG);
 
-    THREAD_SLEEP_UNTIL(time);
-    // Check for the stale credentials
-    CHECK_SIGNALING_CREDENTIALS_EXPIRATION(pSignalingClient);
+    // THREAD_SLEEP_UNTIL(time);
+    // // Check for the stale credentials
+    // //CHECK_SIGNALING_CREDENTIALS_EXPIRATION(pSignalingClient);
 
-    ATOMIC_STORE(&pSignalingClient->result, (SIZE_T) SERVICE_CALL_RESULT_NOT_SET);
+    // ATOMIC_STORE(&pSignalingClient->result, (SIZE_T) SERVICE_CALL_RESULT_NOT_SET);
 
-    switch (pSignalingClient->pChannelInfo->cachingPolicy) {
-        case SIGNALING_API_CALL_CACHE_TYPE_NONE:
-            break;
+    // switch (pSignalingClient->pChannelInfo->cachingPolicy) {
+    //     case SIGNALING_API_CALL_CACHE_TYPE_NONE:
+    //         break;
 
-        case SIGNALING_API_CALL_CACHE_TYPE_DESCRIBE_GETENDPOINT:
-            /* explicit fall-through */
-        case SIGNALING_API_CALL_CACHE_TYPE_FILE:
-            if (IS_VALID_TIMESTAMP(pSignalingClient->describeTime) &&
-                time <= pSignalingClient->describeTime + pSignalingClient->pChannelInfo->cachingPeriod) {
-                apiCall = FALSE;
-            }
+    //     case SIGNALING_API_CALL_CACHE_TYPE_DESCRIBE_GETENDPOINT:
+    //         /* explicit fall-through */
+    //     case SIGNALING_API_CALL_CACHE_TYPE_FILE:
+    //         if (IS_VALID_TIMESTAMP(pSignalingClient->describeTime) &&
+    //             time <= pSignalingClient->describeTime + pSignalingClient->pChannelInfo->cachingPeriod) {
+    //             apiCall = FALSE;
+    //         }
 
-            break;
-    }
+    //         break;
+    // }
 
     // Call DescribeChannel API
     if (STATUS_SUCCEEDED(retStatus)) {
@@ -1047,16 +1107,16 @@ STATUS describeChannel(PSignalingClient pSignalingClient, UINT64 time)
                 retStatus = pSignalingClient->clientInfo.describePreHookFn(pSignalingClient->clientInfo.hookCustomData);
             }
 
-            if (STATUS_SUCCEEDED(retStatus)) {
-                retStatus = describeChannelLws(pSignalingClient, time);
-                // Store the last call time on success
-                if (STATUS_SUCCEEDED(retStatus)) {
-                    pSignalingClient->describeTime = time;
-                }
+            // if (STATUS_SUCCEEDED(retStatus)) {
+            //     retStatus = describeChannelLws(pSignalingClient, time);
+            //     // Store the last call time on success
+            //     if (STATUS_SUCCEEDED(retStatus)) {
+            //         pSignalingClient->describeTime = time;
+            //     }
 
-                // Calculate the latency whether the call succeeded or not
-                SIGNALING_API_LATENCY_CALCULATION(pSignalingClient, time, TRUE);
-            }
+            //     // Calculate the latency whether the call succeeded or not
+            //     SIGNALING_API_LATENCY_CALCULATION(pSignalingClient, time, TRUE);
+            // }
 
             // Call post hook func
             if (pSignalingClient->clientInfo.describePostHookFn != NULL) {
@@ -1083,7 +1143,7 @@ STATUS createChannel(PSignalingClient pSignalingClient, UINT64 time)
     THREAD_SLEEP_UNTIL(time);
 
     // Check for the stale credentials
-    CHECK_SIGNALING_CREDENTIALS_EXPIRATION(pSignalingClient);
+    //CHECK_SIGNALING_CREDENTIALS_EXPIRATION(pSignalingClient);
 
     ATOMIC_STORE(&pSignalingClient->result, (SIZE_T) SERVICE_CALL_RESULT_NOT_SET);
 
@@ -1121,8 +1181,32 @@ STATUS getChannelEndpoint(PSignalingClient pSignalingClient, UINT64 time)
     STATUS retStatus = STATUS_SUCCESS;
     BOOL apiCall = TRUE;
     SignalingFileCacheEntry signalingFileCacheEntry;
+    PCHAR pRelay;
+    UINT32 len;
 
     CHK(pSignalingClient != NULL, STATUS_NULL_ARG);
+
+#ifdef KVS_USE_OPENSSL
+    if (pSignalingClient->pKvsNgtcp2Transport != NULL) {
+        ATOMIC_STORE(&pSignalingClient->result, (SIZE_T) SERVICE_CALL_RESULT_OK);
+        pSignalingClient->getEndpointTime = time;
+        pRelay = pSignalingClient->clientInfo.signalingClientInfo.pRelayUrl;
+        if (pRelay != NULL) {
+            len = (UINT32) STRNLEN(pRelay, MAX_SIGNALING_ENDPOINT_URI_LEN + 1);
+            if (len > MAX_SIGNALING_ENDPOINT_URI_LEN) {
+                len = MAX_SIGNALING_ENDPOINT_URI_LEN;
+            }
+            STRNCPY(pSignalingClient->channelEndpointWss, pRelay, len);
+            pSignalingClient->channelEndpointWss[len] = '\0';
+            STRNCPY(pSignalingClient->channelEndpointHttps, pRelay, len);
+            pSignalingClient->channelEndpointHttps[len] = '\0';
+            STRNCPY(pSignalingClient->channelEndpointWebrtc, pRelay, len);
+            pSignalingClient->channelEndpointWebrtc[len] = '\0';
+        }
+        LEAVES();
+        return STATUS_SUCCESS;
+    }
+#endif
 
     THREAD_SLEEP_UNTIL(time);
 
@@ -1205,6 +1289,15 @@ STATUS getIceConfig(PSignalingClient pSignalingClient, UINT64 time)
 
     CHK(pSignalingClient != NULL, STATUS_NULL_ARG);
 
+#ifdef KVS_USE_OPENSSL
+    if (pSignalingClient->pKvsNgtcp2Transport != NULL) {
+        ATOMIC_STORE(&pSignalingClient->result, (SIZE_T) SERVICE_CALL_RESULT_OK);
+        pSignalingClient->getIceConfigTime = time;
+        LEAVES();
+        return STATUS_SUCCESS;
+    }
+#endif
+
     THREAD_SLEEP_UNTIL(time);
 
     // Check for the stale credentials
@@ -1285,8 +1378,43 @@ STATUS connectSignalingChannel(PSignalingClient pSignalingClient, UINT64 time)
 {
     ENTERS();
     STATUS retStatus = STATUS_SUCCESS;
+    PCHAR pRelayUrl;
+    CHAR host[256];
+    CHAR port[16];
+    PCHAR pColon;
 
     CHK(pSignalingClient != NULL, STATUS_NULL_ARG);
+
+#ifdef KVS_USE_OPENSSL
+    if (pSignalingClient->pKvsNgtcp2Transport != NULL) {
+        pRelayUrl = pSignalingClient->clientInfo.signalingClientInfo.pRelayUrl;
+        CHK(pRelayUrl != NULL, STATUS_NULL_ARG);
+        pColon = STRCHR(pRelayUrl, ':');
+        if (pColon != NULL && (size_t)(pColon - pRelayUrl) < ARRAY_SIZE(host)) {
+            STRNCPY(host, pRelayUrl, (UINT32)(pColon - pRelayUrl));
+            host[pColon - pRelayUrl] = '\0';
+            SNPRINTF(port, ARRAY_SIZE(port), "%.*s", (int)(STRNLEN(pColon + 1, ARRAY_SIZE(port) - 1)), pColon + 1);
+        } else {
+            SNPRINTF(host, ARRAY_SIZE(host), "%.*s", (int)(STRNLEN(pRelayUrl, ARRAY_SIZE(host) - 1)), pRelayUrl);
+            SNPRINTF(port, ARRAY_SIZE(port), "4433");
+        }
+        ATOMIC_STORE(&pSignalingClient->result, (SIZE_T) SERVICE_CALL_RESULT_NOT_SET);
+        if (!ATOMIC_LOAD_BOOL(&pSignalingClient->connected)) {
+            retStatus = kvsNgtcp2TransportConnect((PKvsNgtcp2Transport) pSignalingClient->pKvsNgtcp2Transport, host, port);
+            if (STATUS_SUCCEEDED(retStatus)) {
+                pSignalingClient->connectTime = time;
+                ATOMIC_STORE(&pSignalingClient->result, (SIZE_T) SERVICE_CALL_RESULT_OK);
+                ATOMIC_STORE_BOOL(&pSignalingClient->connected, TRUE);
+            } else {
+                ATOMIC_STORE(&pSignalingClient->result, (SIZE_T) SERVICE_CALL_NOT_AUTHORIZED);
+            }
+        } else {
+            ATOMIC_STORE(&pSignalingClient->result, (SIZE_T) SERVICE_CALL_RESULT_OK);
+        }
+        LEAVES();
+        return retStatus;
+    }
+#endif
 
     THREAD_SLEEP_UNTIL(time);
 

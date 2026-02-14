@@ -213,21 +213,28 @@ PVOID sendVideoPackets(PVOID args)
         encoderStats.targetBitrate = 262000;
         frame.presentationTs += SAMPLE_VIDEO_FRAME_DURATION;
         MUTEX_LOCK(pSampleConfiguration->streamingSessionListReadLock);
-        for (i = 0; i < pSampleConfiguration->streamingSessionCount; ++i) {
-            status = writeFrame(pSampleConfiguration->sampleStreamingSessionList[i]->pVideoRtcRtpTransceiver, &frame);
-            if (pSampleConfiguration->sampleStreamingSessionList[i]->firstFrame && status == STATUS_SUCCESS) {
-                PROFILE_WITH_START_TIME(pSampleConfiguration->sampleStreamingSessionList[i]->offerReceiveTime, "Time to first frame");
-                pSampleConfiguration->sampleStreamingSessionList[i]->firstFrame = FALSE;
+        if (pSampleConfiguration->clientInfo.pRelayUrl != NULL) {
+            status = signalingClientSendRelayMedia(pSampleConfiguration->signalingClientHandle, TRUE, (PBYTE) frame.frameData, frame.size);
+            if (status != STATUS_SUCCESS) {
+                DLOGV("signalingClientSendRelayMedia(video) failed with 0x%08x", status);
             }
-            encoderStats.encodeTimeMsec = 4; // update encode time to an arbitrary number to demonstrate stats update
-            updateEncoderStats(pSampleConfiguration->sampleStreamingSessionList[i]->pVideoRtcRtpTransceiver, &encoderStats);
-            if (status != STATUS_SRTP_NOT_READY_YET) {
-                if (status != STATUS_SUCCESS) {
-                    DLOGV("writeFrame() failed with 0x%08x", status);
+        } else {
+            for (i = 0; i < pSampleConfiguration->streamingSessionCount; ++i) {
+                status = writeFrame(pSampleConfiguration->sampleStreamingSessionList[i]->pVideoRtcRtpTransceiver, &frame);
+                if (pSampleConfiguration->sampleStreamingSessionList[i]->firstFrame && status == STATUS_SUCCESS) {
+                    PROFILE_WITH_START_TIME(pSampleConfiguration->sampleStreamingSessionList[i]->offerReceiveTime, "Time to first frame");
+                    pSampleConfiguration->sampleStreamingSessionList[i]->firstFrame = FALSE;
                 }
-            } else {
-                // Reset file index to ensure first frame sent upon SRTP ready is a key frame.
-                fileIndex = 0;
+                encoderStats.encodeTimeMsec = 4; // update encode time to an arbitrary number to demonstrate stats update
+                updateEncoderStats(pSampleConfiguration->sampleStreamingSessionList[i]->pVideoRtcRtpTransceiver, &encoderStats);
+                if (status != STATUS_SRTP_NOT_READY_YET) {
+                    if (status != STATUS_SUCCESS) {
+                        DLOGV("writeFrame() failed with 0x%08x", status);
+                    }
+                } else {
+                    // Reset file index to ensure first frame sent upon SRTP ready is a key frame.
+                    fileIndex = 0;
+                }
             }
         }
         MUTEX_UNLOCK(pSampleConfiguration->streamingSessionListReadLock);
@@ -285,18 +292,25 @@ PVOID sendAudioPackets(PVOID args)
         frame.presentationTs += SAMPLE_AUDIO_FRAME_DURATION;
 
         MUTEX_LOCK(pSampleConfiguration->streamingSessionListReadLock);
-        for (i = 0; i < pSampleConfiguration->streamingSessionCount; ++i) {
-            status = writeFrame(pSampleConfiguration->sampleStreamingSessionList[i]->pAudioRtcRtpTransceiver, &frame);
-            if (status != STATUS_SRTP_NOT_READY_YET) {
-                if (status != STATUS_SUCCESS) {
-                    DLOGV("writeFrame() failed with 0x%08x", status);
-                } else if (pSampleConfiguration->sampleStreamingSessionList[i]->firstFrame && status == STATUS_SUCCESS) {
-                    PROFILE_WITH_START_TIME(pSampleConfiguration->sampleStreamingSessionList[i]->offerReceiveTime, "Time to first frame");
-                    pSampleConfiguration->sampleStreamingSessionList[i]->firstFrame = FALSE;
+        if (pSampleConfiguration->clientInfo.pRelayUrl != NULL) {
+            status = signalingClientSendRelayMedia(pSampleConfiguration->signalingClientHandle, FALSE, (PBYTE) frame.frameData, frame.size);
+            if (status != STATUS_SUCCESS) {
+                DLOGV("signalingClientSendRelayMedia(audio) failed with 0x%08x", status);
+            }
+        } else {
+            for (i = 0; i < pSampleConfiguration->streamingSessionCount; ++i) {
+                status = writeFrame(pSampleConfiguration->sampleStreamingSessionList[i]->pAudioRtcRtpTransceiver, &frame);
+                if (status != STATUS_SRTP_NOT_READY_YET) {
+                    if (status != STATUS_SUCCESS) {
+                        DLOGV("writeFrame() failed with 0x%08x", status);
+                    } else if (pSampleConfiguration->sampleStreamingSessionList[i]->firstFrame && status == STATUS_SUCCESS) {
+                        PROFILE_WITH_START_TIME(pSampleConfiguration->sampleStreamingSessionList[i]->offerReceiveTime, "Time to first frame");
+                        pSampleConfiguration->sampleStreamingSessionList[i]->firstFrame = FALSE;
+                    }
+                } else {
+                    // Reset file index to stay in sync with video frames.
+                    fileIndex = 0;
                 }
-            } else {
-                // Reset file index to stay in sync with video frames.
-                fileIndex = 0;
             }
         }
         MUTEX_UNLOCK(pSampleConfiguration->streamingSessionListReadLock);

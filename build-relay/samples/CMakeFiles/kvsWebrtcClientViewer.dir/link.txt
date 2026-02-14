@@ -1,0 +1,1 @@
+/usr/bin/cc  -fPIC -O3 -DNDEBUG CMakeFiles/kvsWebrtcClientViewer.dir/Common.c.o CMakeFiles/kvsWebrtcClientViewer.dir/kvsWebRTCClientViewer.c.o -o kvsWebrtcClientViewer   -L/home/yq/kvs-c/open-source/lib  -Wl,-rpath,/home/yq/kvs-c/open-source/lib:/home/yq/kvs-c/build-relay: ../libkvsWebrtcClient.so ../libkvsWebrtcSignalingClient.so -lkvsCommonLws -lkvspicUtils -lwebsockets 

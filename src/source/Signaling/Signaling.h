@@ -347,6 +347,9 @@ typedef struct {
     // Generic websocket connection objects - can be used by any implementation
     PVOID currentWsi[LWS_PROTOCOL_COUNT];
 
+    // kvs-ngtcp2 relay transport (when pRelayUrl is set in SignalingClientInfo)
+    PVOID pKvsNgtcp2Transport;
+
     // List of the ongoing messages
     PStackQueue pMessageQueue;
 
@@ -395,6 +398,7 @@ STATUS createSignalingSync(PSignalingClientInfoInternal, PChannelInfo, PSignalin
 STATUS freeSignaling(PSignalingClient*);
 
 STATUS signalingSendMessageSync(PSignalingClient, PSignalingMessage);
+STATUS signalingSendRelayMediaSync(PSignalingClient, BOOL isVideo, PBYTE pData, UINT32 dataLen);
 STATUS signalingGetIceConfigInfoCount(PSignalingClient, PUINT32);
 STATUS signalingGetIceConfigInfo(PSignalingClient, UINT32, PIceConfigInfo*);
 STATUS signalingFetchSync(PSignalingClient);

@@ -1343,6 +1343,7 @@ typedef struct {
                                             //!< field
     UINT32 signalingMessagesMinimumThreads; //!< Unused field post v1.8.1
     UINT32 signalingMessagesMaximumThreads; //!< Unused field post v1.8.1
+    PCHAR pRelayUrl; //!< Optional. When set (e.g. "host:port"), use kvs-ngtcp2 relay transport instead of WebSocket.
 } SignalingClientInfo, *PSignalingClientInfo;
 
 /**
@@ -1480,6 +1481,15 @@ typedef STATUS (*SignalingClientErrorReportFunc)(UINT64, STATUS, PCHAR, UINT32);
  * @return - STATUS code of the operation
  */
 typedef STATUS (*SignalingClientStateChangedFunc)(UINT64, SIGNALING_CLIENT_STATE);
+
+/**
+ * Callback for kvs-ngtcp2 relay media (stream 1=audio, 2=video). Optional; used when pRelayUrl is set.
+ * @param customData - custom data from SignalingClientCallbacks
+ * @param isVideo - TRUE for video (stream 2), FALSE for audio (stream 1)
+ * @param pData - frame payload (length-prefixed frame body)
+ * @param dataLen - length of pData
+ */
+typedef void (*RelayMediaReceivedFunc)(UINT64 customData, BOOL isVideo, PBYTE pData, UINT32 dataLen);
 /*!@} */
 
 /*! \addtogroup PublicStructures
@@ -1496,6 +1506,7 @@ typedef struct {
     SignalingClientErrorReportFunc errorReportFn;         //!< Error reporting function. This is an optional member
     SignalingClientStateChangedFunc stateChangeFn;        //!< Signaling client state change callback
     GetCurrentTimeFunc getCurrentTimeFn;                  //!< callback to override system time, used for testing clock skew
+    RelayMediaReceivedFunc relayMediaReceivedFn;          //!< Optional. When using kvs-ngtcp2 relay (pRelayUrl), callback for received audio/video frames
 } SignalingClientCallbacks, *PSignalingClientCallbacks;
 
 /**
@@ -2095,6 +2106,17 @@ PUBLIC_API STATUS freeSignalingClient(PSIGNALING_CLIENT_HANDLE);
  * @return STATUS code of the execution. STATUS_SUCCESS on success
  */
 PUBLIC_API STATUS signalingClientSendMessageSync(SIGNALING_CLIENT_HANDLE, PSignalingMessage);
+
+/**
+ * @brief Send a media frame over the kvs-ngtcp2 relay (stream 1=audio, 2=video). Only valid when pRelayUrl was set.
+ *
+ * @param[in] SIGNALING_CLIENT_HANDLE Signaling client handle
+ * @param[in] isVideo TRUE for video (stream 2), FALSE for audio (stream 1)
+ * @param[in] pData Frame payload
+ * @param[in] dataLen Length of pData
+ * @return STATUS code. STATUS_INVALID_OPERATION if not using relay.
+ */
+PUBLIC_API STATUS signalingClientSendRelayMedia(SIGNALING_CLIENT_HANDLE, BOOL isVideo, PBYTE pData, UINT32 dataLen);
 
 /**
  * @brief Gets the retrieved ICE configuration information object count

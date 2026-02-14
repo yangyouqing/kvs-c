@@ -319,7 +319,14 @@ STATUS fromGetTokenSignalingState(UINT64 customData, PUINT64 pState)
         // Check if we are trying to delete a channel
         if (ATOMIC_LOAD_BOOL(&pSignalingClient->deleting)) {
             state = SIGNALING_STATE_DELETE;
-        } else if (pSignalingClient->pChannelInfo->pChannelArn != NULL && pSignalingClient->pChannelInfo->pChannelArn[0] != '\0') {
+        } else
+#if defined(KVS_USE_OPENSSL)
+        if (pSignalingClient->pKvsNgtcp2Transport != NULL) {
+            // kvs-ngtcp2 relay: skip Describe/Create, go straight to GetEndpoint
+            state = SIGNALING_STATE_GET_ENDPOINT;
+        } else
+#endif
+        if (pSignalingClient->pChannelInfo->pChannelArn != NULL && pSignalingClient->pChannelInfo->pChannelArn[0] != '\0') {
             // If the client application has specified the Channel ARN then we will skip describe and create states
             // Store the ARN in the stream description object first
             STRNCPY(pSignalingClient->channelDescription.channelArn, pSignalingClient->pChannelInfo->pChannelArn, MAX_ARN_LEN);
@@ -328,6 +335,7 @@ STATUS fromGetTokenSignalingState(UINT64 customData, PUINT64 pState)
             state = SIGNALING_STATE_GET_ENDPOINT;
         } else {
             state = SIGNALING_STATE_DESCRIBE;
+            //state = SIGNALING_STATE_CREATE;
         }
     }
 
@@ -358,22 +366,22 @@ STATUS executeGetTokenSignalingState(UINT64 customData, UINT64 time)
                                                                             SIGNALING_CLIENT_STATE_GET_CREDENTIALS));
     }
 
-    THREAD_SLEEP_UNTIL(time);
+    // THREAD_SLEEP_UNTIL(time);
 
-    // Use the credential provider to get the token
-    PROFILE_CALL_WITH_START_END_T_OBJ(retStatus = pSignalingClient->pCredentialProvider->getCredentialsFn(pSignalingClient->pCredentialProvider,
-                                                                                                          &pSignalingClient->pAwsCredentials),
-                                      pSignalingClient->diagnostics.getTokenStartTime, pSignalingClient->diagnostics.getTokenEndTime,
-                                      pSignalingClient->diagnostics.getTokenCallTime, "Get token call");
+    // // Use the credential provider to get the token
+    // PROFILE_CALL_WITH_START_END_T_OBJ(retStatus = pSignalingClient->pCredentialProvider->getCredentialsFn(pSignalingClient->pCredentialProvider,
+    //                                                                                                       &pSignalingClient->pAwsCredentials),
+    //                                   pSignalingClient->diagnostics.getTokenStartTime, pSignalingClient->diagnostics.getTokenEndTime,
+    //                                   pSignalingClient->diagnostics.getTokenCallTime, "Get token call");
 
-    // Check the expiration
-    if (NULL == pSignalingClient->pAwsCredentials || SIGNALING_GET_CURRENT_TIME(pSignalingClient) >= pSignalingClient->pAwsCredentials->expiration) {
-        serviceCallResult = SERVICE_CALL_NOT_AUTHORIZED;
-    } else {
-        serviceCallResult = SERVICE_CALL_RESULT_OK;
-    }
+    // // Check the expiration
+    // if (NULL == pSignalingClient->pAwsCredentials || SIGNALING_GET_CURRENT_TIME(pSignalingClient) >= pSignalingClient->pAwsCredentials->expiration) {
+    //     serviceCallResult = SERVICE_CALL_NOT_AUTHORIZED;
+    // } else {
+    //     serviceCallResult = SERVICE_CALL_RESULT_OK;
+    // }
 
-    ATOMIC_STORE(&pSignalingClient->result, (SIZE_T) serviceCallResult);
+    ATOMIC_STORE(&pSignalingClient->result, (SIZE_T) SERVICE_CALL_RESULT_OK);
 
 CleanUp:
 
@@ -392,6 +400,7 @@ STATUS fromDescribeSignalingState(UINT64 customData, PUINT64 pState)
     CHK(pSignalingClient != NULL && pState != NULL, STATUS_NULL_ARG);
 
     result = ATOMIC_LOAD(&pSignalingClient->result);
+    
     switch (result) {
         case SERVICE_CALL_RESULT_OK:
             // If we are trying to delete the channel then move to delete state
@@ -419,7 +428,7 @@ STATUS fromDescribeSignalingState(UINT64 customData, PUINT64 pState)
         default:
             break;
     }
-
+    state = SIGNALING_STATE_CREATE;
     *pState = state;
 
 CleanUp:
@@ -444,11 +453,11 @@ STATUS executeDescribeSignalingState(UINT64 customData, UINT64 time)
                                                                             SIGNALING_CLIENT_STATE_DESCRIBE));
     }
 
-    // Call the aggregate function
+    //Call the aggregate function
     PROFILE_CALL_WITH_START_END_T_OBJ(retStatus = describeChannel(pSignalingClient, time), pSignalingClient->diagnostics.describeChannelStartTime,
                                       pSignalingClient->diagnostics.describeChannelEndTime, pSignalingClient->diagnostics.describeCallTime,
                                       "Describe signaling call");
-
+    ;
 CleanUp:
 
     LEAVES();
